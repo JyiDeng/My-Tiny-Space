@@ -1,0 +1,569 @@
+<!doctype html>
+<html lang="zh">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>My Tiny Space</title>
+    <style>
+      :root {
+        --gray-1: #d7d7d7;
+        --gray-2: #bfbfbf;
+        --gray-3: #a9a9a9;
+        --sky-1: #cfe9ff;
+        --sky-2: #e6f4ff;
+        --ground-1: #d2d2d2;
+        --ground-2: #bdbdbd;
+      }
+      html, body {
+        margin: 0;
+        height: 100%;
+        overflow: hidden;
+        background: var(--gray-1);
+        font-family: "Avenir Next", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+      }
+      #app {
+        width: 100%;
+        height: 100%;
+        position: relative;
+      }
+      #hint {
+        position: absolute;
+        left: 20px;
+        bottom: 20px;
+        background: rgba(255, 255, 255, 0.6);
+        color: #4a4a4a;
+        padding: 10px 14px;
+        border-radius: 12px;
+        backdrop-filter: blur(6px);
+        font-size: 14px;
+      }
+      #title {
+        position: absolute;
+        left: 20px;
+        top: 16px;
+        color: #3f3f3f;
+        font-weight: 600;
+        letter-spacing: 0.5px;
+        text-shadow: 0 2px 10px rgba(255, 255, 255, 0.6);
+      }
+      #controls {
+        position: absolute;
+        right: 18px;
+        top: 16px;
+        display: flex;
+        gap: 8px;
+        background: rgba(255, 255, 255, 0.7);
+        padding: 8px;
+        border-radius: 12px;
+        backdrop-filter: blur(6px);
+      }
+      #controls button {
+        border: 1px solid #cfcfcf;
+        background: #f7f7f7;
+        color: #3f3f3f;
+        padding: 6px 10px;
+        border-radius: 10px;
+        font-size: 12px;
+        cursor: pointer;
+      }
+      #controls button.active {
+        border-color: #9aa7ff;
+        background: #e9edff;
+        color: #2d357a;
+      }
+      #lang-toggle {
+        position: absolute;
+        right: 18px;
+        top: 68px;
+        background: rgba(255, 255, 255, 0.7);
+        padding: 6px;
+        border-radius: 12px;
+        backdrop-filter: blur(6px);
+      }
+      #lang-toggle button {
+        border: 1px solid #cfcfcf;
+        background: #f7f7f7;
+        color: #3f3f3f;
+        padding: 6px 10px;
+        border-radius: 10px;
+        font-size: 12px;
+        cursor: pointer;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="app">
+      <div id="title">我小小的空间</div>
+      <div id="controls">
+        <button data-action="0">躺着</button>
+        <button data-action="1">运动</button>
+        <button data-action="2">工作</button>
+      </div>
+      <div id="lang-toggle">
+        <button id="langBtn">English</button>
+      </div>
+      <div id="hint">拖拽旋转视角 · 滚轮缩放 · 右键拖拽平移</div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.min.js"></script>
+    <script>
+      const app = document.getElementById("app");
+      if (!window.THREE) {
+        const msg = document.createElement("div");
+        msg.textContent = "3D 库加载失败，请检查网络或刷新页面";
+        msg.style.cssText = "position:absolute;left:20px;top:60px;color:#8a3f59;background:rgba(255,255,255,.7);padding:10px 14px;border-radius:10px;";
+        app.appendChild(msg);
+        throw new Error("THREE not loaded");
+      }
+
+      const scene = new THREE.Scene();
+
+      const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
+      renderer.setSize(window.innerWidth, window.innerHeight);
+      renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+      renderer.outputColorSpace = THREE.SRGBColorSpace;
+      renderer.toneMapping = THREE.ACESFilmicToneMapping;
+      renderer.toneMappingExposure = 1.25;
+      renderer.setClearColor(0xd7d7d7, 1);
+      app.appendChild(renderer.domElement);
+
+      const camera = new THREE.PerspectiveCamera(55, window.innerWidth / window.innerHeight, 0.1, 200);
+      camera.position.set(12, 10, 18);
+
+      // Minimal orbit-style controls (no external dependency)
+      const target = new THREE.Vector3(0, 2, 0);
+      let radius = camera.position.clone().sub(target).length();
+      let theta = Math.atan2(camera.position.x - target.x, camera.position.z - target.z);
+      let phi = Math.acos((camera.position.y - target.y) / radius);
+      const minRadius = 8;
+      const maxRadius = 40;
+      const maxPolar = Math.PI * 0.48;
+      const minPolar = 0.15;
+      let isDragging = false;
+      let dragMode = "rotate"; // rotate | pan
+      let lastX = 0;
+      let lastY = 0;
+
+      function updateCamera() {
+        phi = Math.max(minPolar, Math.min(maxPolar, phi));
+        radius = Math.max(minRadius, Math.min(maxRadius, radius));
+        const sinPhi = Math.sin(phi);
+        camera.position.set(
+          target.x + radius * sinPhi * Math.sin(theta),
+          target.y + radius * Math.cos(phi),
+          target.z + radius * sinPhi * Math.cos(theta)
+        );
+        camera.lookAt(target);
+      }
+      updateCamera();
+
+      function onPointerDown(e) {
+        isDragging = true;
+        dragMode = (e.button === 2 || e.shiftKey) ? "pan" : "rotate";
+        lastX = e.clientX;
+        lastY = e.clientY;
+      }
+      function onPointerMove(e) {
+        if (!isDragging) return;
+        const dx = e.clientX - lastX;
+        const dy = e.clientY - lastY;
+        lastX = e.clientX;
+        lastY = e.clientY;
+
+        if (dragMode === "rotate") {
+          theta -= dx * 0.005;
+          phi -= dy * 0.005;
+        } else {
+          const panSpeed = radius * 0.0015;
+          const panX = -dx * panSpeed;
+          const panY = dy * panSpeed;
+          const right = new THREE.Vector3();
+          const up = new THREE.Vector3();
+          camera.getWorldDirection(up);
+          right.crossVectors(up, camera.up).normalize();
+          up.copy(camera.up).normalize();
+          target.addScaledVector(right, panX);
+          target.addScaledVector(up, panY);
+        }
+        updateCamera();
+      }
+      function onPointerUp() {
+        isDragging = false;
+      }
+      function onWheel(e) {
+        e.preventDefault();
+        radius *= 1 + e.deltaY * 0.001;
+        updateCamera();
+      }
+
+      renderer.domElement.addEventListener("pointerdown", onPointerDown);
+      renderer.domElement.addEventListener("pointermove", onPointerMove);
+      renderer.domElement.addEventListener("pointerup", onPointerUp);
+      renderer.domElement.addEventListener("pointerleave", onPointerUp);
+      renderer.domElement.addEventListener("wheel", onWheel, { passive: false });
+      renderer.domElement.addEventListener("contextmenu", (e) => e.preventDefault());
+
+      const ambient = new THREE.AmbientLight(0xffffff, 1.0);
+      scene.add(ambient);
+
+      const dirLight = new THREE.DirectionalLight(0xffffff, 1.15);
+      dirLight.position.set(10, 18, 6);
+      dirLight.castShadow = false;
+      scene.add(dirLight);
+
+      const skyGeo = new THREE.SphereGeometry(120, 32, 32);
+      const skyMat = new THREE.ShaderMaterial({
+        uniforms: {
+          topColor: { value: new THREE.Color("#b9dcff") },
+          bottomColor: { value: new THREE.Color("#e9f5ff") },
+        },
+        vertexShader: `
+          varying vec3 vWorldPos;
+          void main() {
+            vec4 worldPosition = modelMatrix * vec4(position, 1.0);
+            vWorldPos = worldPosition.xyz;
+            gl_Position = projectionMatrix * viewMatrix * worldPosition;
+          }
+        `,
+        fragmentShader: `
+          uniform vec3 topColor;
+          uniform vec3 bottomColor;
+          varying vec3 vWorldPos;
+          void main() {
+            float h = normalize(vWorldPos).y * 0.5 + 0.5;
+            float t = smoothstep(0.1, 0.9, h);
+            t = pow(t, 1.2);
+            gl_FragColor = vec4(mix(bottomColor, topColor, t), 1.0);
+          }
+        `,
+        side: THREE.BackSide,
+      });
+      const sky = new THREE.Mesh(skyGeo, skyMat);
+      scene.add(sky);
+
+      const groundGeo = new THREE.PlaneGeometry(60, 60, 1, 1);
+      const groundMat = new THREE.MeshStandardMaterial({
+        color: new THREE.Color("#d2d2d2"),
+        roughness: 0.9,
+        metalness: 0.0,
+      });
+      const ground = new THREE.Mesh(groundGeo, groundMat);
+      ground.rotation.x = -Math.PI / 2;
+      ground.position.y = 0;
+      scene.add(ground);
+
+      const tiles = new THREE.Group();
+      const tileColors = ["#9fcd8a", "#8fbe7a", "#a6d598"];
+      for (let i = -2; i <= 2; i++) {
+        for (let j = -2; j <= 2; j++) {
+          const tileGeo = new THREE.BoxGeometry(5.0, 0.5, 5.0);
+          const tileMat = new THREE.MeshStandardMaterial({ color: tileColors[(i + j + 10) % tileColors.length] });
+          const tile = new THREE.Mesh(tileGeo, tileMat);
+          tile.position.set(i * 5.2, 0.25, j * 5.2);
+          tiles.add(tile);
+        }
+      }
+      scene.add(tiles);
+
+      const city = new THREE.Group();
+      const reservedSpots = [
+        new THREE.Vector3(0, 0, 8),
+        new THREE.Vector3(-10, 0, -6),
+        new THREE.Vector3(10, 0, -10),
+      ];
+      function isNearReserved(pos) {
+        for (const r of reservedSpots) {
+          if (pos.distanceTo(r) < 4.5) return true;
+        }
+        return false;
+      }
+      const buildingColors = ["#c8c8c8", "#b3b3b3", "#a1a1a1", "#d6d6d6"];
+      const buildingDefs = [
+        { x: -14, z: -14, w: 2.6, h: 9, d: 2.2 },
+        { x: -8, z: -12, w: 2.0, h: 6, d: 2.4 },
+        { x: -16, z: 2, w: 3.0, h: 10, d: 2.6 },
+        { x: -10, z: 10, w: 2.4, h: 7, d: 2.2 },
+        { x: 14, z: -14, w: 2.8, h: 8, d: 2.5 },
+        { x: 8, z: -10, w: 2.2, h: 5.5, d: 2.0 },
+        { x: 16, z: 6, w: 2.6, h: 9.5, d: 2.4 },
+        { x: 10, z: 14, w: 2.4, h: 6.5, d: 2.2 },
+        { x: -2, z: -16, w: 2.2, h: 7.5, d: 2.2 },
+        { x: 2, z: 16, w: 2.0, h: 6.0, d: 2.0 },
+      ];
+      buildingDefs.forEach((def, i) => {
+        const geo = new THREE.BoxGeometry(def.w, def.h, def.d);
+        const mat = new THREE.MeshStandardMaterial({ color: buildingColors[i % buildingColors.length] });
+        const b = new THREE.Mesh(geo, mat);
+        b.position.set(def.x, def.h / 2 + 0.25, def.z);
+        if (!isNearReserved(b.position)) {
+          city.add(b);
+        }
+      });
+      scene.add(city);
+
+      const trees = new THREE.Group();
+      const trunkMat = new THREE.MeshStandardMaterial({ color: "#d59ab0" });
+      const leafMat = new THREE.MeshStandardMaterial({ color: "#b9e7b3" });
+      const leafMatPink = new THREE.MeshStandardMaterial({ color: "#ffb6c9" });
+      const treePositions = [
+        [-12, -2], [-6, -4], [-2, -10], [6, -6], [12, -2],
+        [-14, 8], [-4, 14], [0, 10], [8, 8], [14, 12],
+        [-10, -16], [12, 18], [-18, -2], [16, -6],
+      ];
+      treePositions.forEach(([x, z], i) => {
+        const trunkGeo = new THREE.CylinderGeometry(0.25, 0.35, 2.2, 10);
+        const leafGeo = new THREE.ConeGeometry(1.2, 2.8, 12);
+        const trunk = new THREE.Mesh(trunkGeo, trunkMat);
+        const leaves = new THREE.Mesh(leafGeo, i % 2 === 0 ? leafMat : leafMatPink);
+        const tree = new THREE.Group();
+        trunk.position.y = 1.1;
+        leaves.position.y = 3.0;
+        tree.add(trunk, leaves);
+        const pos = new THREE.Vector3(x, 0, z);
+        if (!isNearReserved(pos)) {
+          tree.position.copy(pos);
+          trees.add(tree);
+        }
+      });
+      scene.add(trees);
+
+      const desk = new THREE.Group();
+      const deskTop = new THREE.Mesh(new THREE.BoxGeometry(3.2, 0.3, 1.6), new THREE.MeshStandardMaterial({ color: "#cfcfcf" }));
+      const deskLeg1 = new THREE.Mesh(new THREE.BoxGeometry(0.2, 1.2, 0.2), new THREE.MeshStandardMaterial({ color: "#9e9e9e" }));
+      const deskLeg2 = deskLeg1.clone();
+      const deskLeg3 = deskLeg1.clone();
+      const deskLeg4 = deskLeg1.clone();
+      deskTop.position.y = 1.0;
+      deskLeg1.position.set(-1.4, 0.4, -0.6);
+      deskLeg2.position.set(1.4, 0.4, -0.6);
+      deskLeg3.position.set(-1.4, 0.4, 0.6);
+      deskLeg4.position.set(1.4, 0.4, 0.6);
+      desk.add(deskTop, deskLeg1, deskLeg2, deskLeg3, deskLeg4);
+      desk.position.copy(reservedSpots[2]);
+      desk.position.z += 2.2;
+      desk.position.y = 0.1;
+      scene.add(desk);
+
+      const clouds = new THREE.Group();
+      const cloudMat = new THREE.MeshStandardMaterial({ color: "#ffffff", roughness: 0.9, metalness: 0.0 });
+      const cloudDefs = [
+        { x: -18, y: 14, z: -10, s: 1.0, speed: 0.03 },
+        { x: 6, y: 16, z: -6, s: 1.2, speed: 0.02 },
+        { x: 12, y: 13, z: 8, s: 0.9, speed: 0.025 },
+        { x: -6, y: 15, z: 10, s: 1.1, speed: 0.018 },
+      ];
+      cloudDefs.forEach((def) => {
+        const cloud = new THREE.Group();
+        const puff1 = new THREE.Mesh(new THREE.SphereGeometry(1.2 * def.s, 16, 16), cloudMat);
+        const puff2 = new THREE.Mesh(new THREE.SphereGeometry(1.0 * def.s, 16, 16), cloudMat);
+        const puff3 = new THREE.Mesh(new THREE.SphereGeometry(0.9 * def.s, 16, 16), cloudMat);
+        puff1.position.set(0, 0, 0);
+        puff2.position.set(1.1 * def.s, 0.2 * def.s, 0.2 * def.s);
+        puff3.position.set(-1.0 * def.s, 0.1 * def.s, -0.2 * def.s);
+        cloud.add(puff1, puff2, puff3);
+        cloud.position.set(def.x, def.y, def.z);
+        cloud.userData.speed = def.speed;
+        clouds.add(cloud);
+      });
+      scene.add(clouds);
+
+      const characterRoot = new THREE.Group();
+      const character = new THREE.Group();
+      characterRoot.add(character);
+      const bodyMat = new THREE.MeshStandardMaterial({ color: "#ffe28a" });
+      const accentMat = new THREE.MeshStandardMaterial({ color: "#ffcf5a" });
+
+      const torso = new THREE.Mesh(new THREE.BoxGeometry(1.15, 1.5, 0.85), bodyMat);
+      torso.position.y = 2.3;
+      const head = new THREE.Mesh(new THREE.SphereGeometry(0.72, 20, 20), bodyMat);
+      head.position.y = 3.5;
+      const eye = new THREE.Mesh(new THREE.SphereGeometry(0.09, 12, 12), new THREE.MeshStandardMaterial({ color: "#55311f" }));
+      eye.position.set(0.24, 3.58, 0.62);
+      const eye2 = eye.clone();
+      eye2.position.x = -0.24;
+      const blush = new THREE.Mesh(new THREE.SphereGeometry(0.12, 12, 12), new THREE.MeshStandardMaterial({ color: "#ffb7b7" }));
+      blush.position.set(0.42, 3.45, 0.55);
+      const blush2 = blush.clone();
+      blush2.position.x = -0.42;
+
+      function createArm(side) {
+        const shoulder = new THREE.Group();
+        const upper = new THREE.Mesh(new THREE.BoxGeometry(0.28, 0.7, 0.28), accentMat);
+        const elbow = new THREE.Group();
+        const lower = new THREE.Mesh(new THREE.BoxGeometry(0.26, 0.6, 0.26), accentMat);
+        upper.position.y = -0.35;
+        elbow.position.y = -0.7;
+        lower.position.y = -0.3;
+        elbow.add(lower);
+        shoulder.add(upper, elbow);
+        shoulder.position.set(side * 0.75, 2.55, 0);
+        return { shoulder, elbow };
+      }
+
+      const leftArm = createArm(-1);
+      const rightArm = createArm(1);
+
+      function createLeg(side) {
+        const hip = new THREE.Group();
+        const upper = new THREE.Mesh(new THREE.BoxGeometry(0.35, 0.8, 0.35), accentMat);
+        const knee = new THREE.Group();
+        const lower = new THREE.Mesh(new THREE.BoxGeometry(0.32, 0.8, 0.32), accentMat);
+        upper.position.y = -0.4;
+        knee.position.y = -0.8;
+        lower.position.y = -0.4;
+        knee.add(lower);
+        hip.add(upper, knee);
+        hip.position.set(side * 0.3, 1.6, 0);
+        return { hip, knee };
+      }
+
+      const leftLeg = createLeg(-1);
+      const rightLeg = createLeg(1);
+
+      character.add(torso, head, eye, eye2, blush, blush2, leftArm.shoulder, rightArm.shoulder, leftLeg.hip, rightLeg.hip);
+      const characterCenterY = 2.2;
+      character.position.set(0, -characterCenterY, 0);
+      characterRoot.position.set(0, 0.2 + characterCenterY, 0);
+      scene.add(characterRoot);
+
+      let t = 0;
+      let currentAction = -1;
+      let manualAction = null;
+      const actionSpots = reservedSpots;
+      const controlButtons = Array.from(document.querySelectorAll("#controls button"));
+      const langBtn = document.getElementById("langBtn");
+      const titleEl = document.getElementById("title");
+      const hintEl = document.getElementById("hint");
+
+      let currentLang = "zh";
+      const translations = {
+        zh: {
+          title: "我小小的空间",
+          hint: "拖拽旋转视角 · 滚轮缩放 · 右键拖拽平移",
+          actions: ["躺着", "运动", "工作"],
+          langBtn: "English",
+        },
+        en: {
+          title: "My Tiny Space",
+          hint: "Drag to rotate · Scroll to zoom · Right-drag to pan",
+          actions: ["Rest", "Exercise", "Work"],
+          langBtn: "中文",
+        },
+      };
+
+      function applyLang(lang) {
+        const t = translations[lang];
+        titleEl.textContent = t.title;
+        hintEl.textContent = t.hint;
+        controlButtons.forEach((btn, i) => {
+          btn.textContent = t.actions[i];
+        });
+        langBtn.textContent = t.langBtn;
+        currentLang = lang;
+      }
+
+      langBtn.addEventListener("click", () => {
+        applyLang(currentLang === "zh" ? "en" : "zh");
+      });
+
+      applyLang("zh");
+
+      function setActionFromTime() {
+        const hour = new Date().getHours();
+        currentAction = hour % 3;
+        manualAction = null;
+        controlButtons.forEach((btn) => {
+          btn.classList.toggle("active", Number(btn.dataset.action) === currentAction);
+        });
+      }
+      setActionFromTime();
+      setInterval(setActionFromTime, 60 * 1000);
+
+      controlButtons.forEach((btn) => {
+        btn.addEventListener("click", () => {
+          manualAction = Number(btn.dataset.action);
+          controlButtons.forEach((b) => b.classList.toggle("active", b === btn));
+        });
+      });
+
+      function poseRelaxedLie() {
+        characterRoot.position.copy(actionSpots[0]);
+        characterRoot.position.y = -1.5 + characterCenterY;
+        characterRoot.rotation.set(-Math.PI * 0.5, 0, 0);
+        torso.rotation.set(0, 0, 0);
+        head.rotation.set(0.2, 0, 0);
+        leftArm.shoulder.rotation.set(0, 0, -0.35);
+        rightArm.shoulder.rotation.set(0, 0, 0.35);
+        leftArm.elbow.rotation.set(0, 0, 0);
+        rightArm.elbow.rotation.set(0, 0, 0);
+        leftLeg.hip.rotation.set(0.2, 0.1, 0);
+        leftLeg.knee.rotation.set(0.1, 0, -0.6);
+        rightLeg.hip.rotation.set(0.1, 0.0, 0);
+        rightLeg.knee.rotation.set(0.15, 0, 0.5);
+      }
+
+      function poseExercise(time) {
+        characterRoot.position.copy(actionSpots[1]);
+        // characterRoot.position.y = 0.2 + characterCenterY;
+        characterRoot.rotation.set(0, 0, 0);
+        torso.rotation.set(0, 0, 0);
+        head.rotation.set(0, 0, 0);
+        const swing = Math.sin(time * 4) * 0.6;
+        const squat = (Math.sin(time * 2) + 1) * 0.3;
+        characterRoot.position.y = 0.6 - squat + characterCenterY;
+        leftArm.shoulder.rotation.x = swing;
+        rightArm.shoulder.rotation.x = -swing;
+        leftArm.elbow.rotation.x = Math.max(0, swing * 0.4);
+        rightArm.elbow.rotation.x = Math.max(0, -swing * 0.4);
+        leftLeg.hip.rotation.set(-swing * 0.7, 0, 0);
+        rightLeg.hip.rotation.set(swing * 0.7, 0, 0);
+        leftLeg.knee.rotation.x = Math.max(0, squat * 1.8);
+        rightLeg.knee.rotation.x = Math.max(0, squat * 1.8);
+      }
+
+      function poseWork(time) {
+        characterRoot.position.copy(actionSpots[2]);
+        characterRoot.position.y = 0.2 + characterCenterY;
+        characterRoot.rotation.set(0, 0, 0);
+        torso.rotation.set(0.1, 0, 0);
+        head.rotation.set(0.2, 0, 0);
+        const type = Math.sin(time * 4) * 0.25;
+        leftArm.shoulder.rotation.set(-0.8 + type, 0.1, 0);
+        rightArm.shoulder.rotation.set(-0.8 - type, -0.1, 0);
+        leftArm.elbow.rotation.set(0.6, 0, 0);
+        rightArm.elbow.rotation.set(0.6, 0, 0);
+        leftLeg.hip.rotation.set(0.1, 0, 0);
+        rightLeg.hip.rotation.set(0.1, 0, 0);
+        leftLeg.knee.rotation.set(0.2, 0, 0);
+        rightLeg.knee.rotation.set(0.2, 0, 0);
+      }
+
+      function animate() {
+        t += 0.02;
+        const action = manualAction ?? currentAction;
+        if (action === 0) {
+          poseRelaxedLie();
+        } else if (action === 1) {
+          poseExercise(t);
+        } else {
+          poseWork(t);
+        }
+
+        clouds.children.forEach((cloud) => {
+          cloud.position.x += cloud.userData.speed;
+          if (cloud.position.x > 24) cloud.position.x = -24;
+        });
+
+        renderer.render(scene, camera);
+        requestAnimationFrame(animate);
+      }
+      animate();
+
+      window.addEventListener("resize", () => {
+        camera.aspect = window.innerWidth / window.innerHeight;
+        camera.updateProjectionMatrix();
+        renderer.setSize(window.innerWidth, window.innerHeight);
+      });
+    </script>
+  </body>
+</html>
